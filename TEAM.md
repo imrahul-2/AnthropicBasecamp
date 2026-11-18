@@ -1,4 +1,4 @@
-# Team: Room <number>
+# Team: Room 6
 
 Your team name is your breakout room number. The repo owner types it on the
 first line, exactly as in the guide: replace `<number>` with your room number.
@@ -13,6 +13,7 @@ decides in the moment who does what.
 
 - Rahul Mishra
 - Amit Mehta
-- Saksham
+- Saksham Srivastava
 - Roshan Panigrahi
 - Shashwat sharma
+- Shambhavi Mishra
