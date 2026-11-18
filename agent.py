@@ -65,19 +65,17 @@ def run_agent(pnr: str, last_name: str, message: str) -> str:            # ✏�
         thinking={"type": "adaptive"}, tools=tools, messages=messages,
     )
 
-    answer = ""
     turns = 1
     while response.stop_reason == "tool_use" and turns < MAX_TOOL_CALLS:
-        messages.append({"role": "assistant", "content": text_of(response)})
+        messages.append({"role": "assistant", "content": response.content})
         messages.append({"role": "user", "content": tool_results(response)})
-        answer = text_of(response)
         response = client.messages.create(
             model=MODEL, max_tokens=4096, system=runtime_preamble() + SYSTEM_PROMPT + TONE_ADDENDUM,
             thinking={"type": "adaptive"}, tools=tools, messages=messages,
         )
         turns += 1
 
-    return answer
+    return text_of(response)
 
 
 def tool_list() -> List[Dict[str, Any]]:                   # ✏️ Build 2, step 2.2
@@ -118,18 +116,41 @@ def build_tools() -> List[Dict[str, Any]]:                 # ✏️ Build 1, ste
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "flight_no": {"type": "string"},
-                    "date": {"type": "string", "description": "MM/DD/YYYY"},
+                    "flight_no": {
+                        "type": "string",
+                        "description": "The flight number as it appears on the booking segment, e.g. LK123.",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "The flight's local departure date in YYYY-MM-DD format, e.g. 2025-05-08. Any other format is rejected.",
+                    },
                 },
                 "required": ["flight_no", "date"],
             },
         },
         {
             "name": "search_alternatives",
-            "description": "search",
+            "description": (
+                "Find rebooking options for the disrupted segment on a booking: nonstop "
+                "Larkspur or Larkspur Link flights on the same route and cabin, excluding "
+                "the flight the customer is already on, with enough open seats for the "
+                "whole party. Returns up to seven options (each with an option_id, date, "
+                "departure and arrival times, and seats available), plus an excluded list "
+                "with reasons (such as insufficient seats) and any other-cabin options. "
+                "Use it once the flight status confirms a disruption and the customer needs "
+                "another flight; the route, date, cabin and party size come from the "
+                "booking, not from you. Only offer the customer options this tool returned, "
+                "and pass the chosen option_id to hold_seat. It only searches: it holds and "
+                "changes nothing."
+            ),
             "input_schema": {
                 "type": "object",
-                "properties": {"pnr": {"type": "string"}},
+                "properties": {
+                    "pnr": {
+                        "type": "string",
+                        "description": "The customer's six-character confirmation code (PNR), as already used in lookup_booking.",
+                    },
+                },
                 "required": ["pnr"],
             },
         },
@@ -159,10 +180,27 @@ def build_tools() -> List[Dict[str, Any]]:                 # ✏️ Build 1, ste
         },
         {
             "name": "hold_seat",
-            "description": "Place a 15-minute hold on one alternative. Reversible. It simply expires.",
+            "description": (
+                "Place a 15-minute hold on one rebooking option so the seat is not lost "
+                "while the customer decides. Call it only after the customer has picked a "
+                "specific option returned by search_alternatives; never hold on a guess or "
+                "to compare options. Reversible: an unconfirmed hold simply expires. "
+                "Returns a hold_id, which is what confirm_rebooking needs. A hold is not a "
+                "rebooking: tell the customer the seat is held for 15 minutes and that they "
+                "must press Confirm to finalize it."
+            ),
             "input_schema": {
                 "type": "object",
-                "properties": {"option_id": {"type": "string"}, "pnr": {"type": "string"}},
+                "properties": {
+                    "option_id": {
+                        "type": "string",
+                        "description": "The option_id of the option the customer chose, copied exactly from a search_alternatives result.",
+                    },
+                    "pnr": {
+                        "type": "string",
+                        "description": "The confirmation code (PNR) of the booking being rebooked.",
+                    },
+                },
                 "required": ["option_id", "pnr"],
             },
         },
