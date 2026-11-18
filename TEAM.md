@@ -17,3 +17,4 @@ decides in the moment who does what.
 - Roshan Panigrahi
 - Shashwat sharma
 - Shambhavi Mishra
+- Kushal Nandi
