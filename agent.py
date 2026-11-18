@@ -69,10 +69,20 @@ def cause_in_plain_words(cause_code: str, language: str = "en") -> Any:
     return {"cause_code": code, "language": lang, "customer_wording": labels[code][lang]}
 
 
-def care_entitlements(cause_code: str, status: str, delay_minutes: int = 0) -> Any:
+def care_entitlements(cause_code: str, status: str, delay_minutes: int = 0,
+                      wait_minutes_for_alternative: Any = None, overnight: Any = None) -> Any:
     """What care (meal, hotel, ground) applies while waiting: the policy row's
-    care block plus Handbook section 6."""
+    care block plus Handbook section 6. Where the policy makes an amount
+    conditional (wait length, overnight), it is resolved when the caller says
+    which case applies, and flagged as unresolved when it does not."""
     policy = _policy()
+    try:
+        delay = int(delay_minutes or 0)
+        wait = None if wait_minutes_for_alternative in (None, "") else int(wait_minutes_for_alternative)
+    except (TypeError, ValueError):
+        return {"error": "delay_minutes and wait_minutes_for_alternative must be whole numbers of minutes."}
+    if delay < 0 or (wait is not None and wait < 0):
+        return {"error": "Minutes cannot be negative. Use 0 for delay_minutes if cancelled or diverted."}
     code = (cause_code or "").strip().upper()
     status = (status or "").strip().upper()
     if code not in policy["cause_classes"]:
@@ -83,15 +93,59 @@ def care_entitlements(cause_code: str, status: str, delay_minutes: int = 0) -> A
         band = "DIV"
     elif status in ("ON_TIME", "DELAYED"):
         band = next((b["band"] for b in policy["delay_bands"]
-                     if b["band"] not in ("CXL", "DIV") and b["min_minutes"] <= int(delay_minutes or 0)
-                     and (b["max_minutes"] is None or int(delay_minutes or 0) <= b["max_minutes"])), None)
+                     if b["band"] not in ("CXL", "DIV") and b["min_minutes"] <= delay
+                     and (b["max_minutes"] is None or delay <= b["max_minutes"])), None)
     else:
         return {"error": "status must be one of ON_TIME, DELAYED, CANCELLED, DIVERTED."}
     prefix = "UNC" if policy["cause_classes"][code] == "uncontrollable" else "CTL"
     row = next((r for r in policy["rows"] if r["policy_row_id"] == f"{prefix}-{band}"), None)
     if row is None:
         return {"error": f"No policy row for {prefix}-{band}."}
-    return {"policy_row_id": row["policy_row_id"], "care": row["care"],
+    care, applies, unresolved = row["care"], {}, []
+    meal = care.get("meal_usd")
+    if isinstance(meal, dict):
+        if wait is None:
+            unresolved.append(f"meal: ${meal['amount']} only if the wait for an alternative is "
+                              f"{meal['if_wait_minutes_for_alternative_gte']} minutes or more. "
+                              "Wait is not known yet: do not promise the meal.")
+        else:
+            applies["meal_usd"] = meal["amount"] if wait >= meal["if_wait_minutes_for_alternative_gte"] else meal["else"]
+    else:
+        applies["meal_usd"] = meal
+    hotel = care.get("hotel", {})
+    if hotel.get("eligible") == "if_overnight":
+        if overnight is None:
+            unresolved.append("hotel: only if the customer is stuck overnight. Not known yet: "
+                              "do not promise a hotel.")
+        else:
+            applies["hotel_eligible"] = bool(overnight)
+            if overnight:
+                applies["hotel_terms"] = (f"up to ${hotel['nightly_cap_usd']} for {hotel['nights']} night; "
+                                          f"approval: {hotel['approval']}, so a human confirms it, "
+                                          "do not say it is booked")
+    else:
+        applies["hotel_eligible"] = bool(hotel.get("eligible"))
+        if hotel.get("instead"):
+            applies["hotel_instead"] = hotel["instead"]
+        if hotel.get("exception"):
+            if overnight is None:
+                unresolved.append(f"hotel: not covered, except {hotel['exception']}. "
+                                  "Overnight is not known yet: do not promise a hotel.")
+            elif overnight:
+                applies["hotel_exception"] = hotel["exception"]
+    ground = care.get("ground_usd")
+    if isinstance(ground, dict) and "if_overnight" in ground:
+        if overnight is None:
+            unresolved.append(f"ground transport: ${ground['if_overnight']} only if overnight. "
+                              "Not known yet: do not promise it.")
+        else:
+            applies["ground_usd"] = ground["if_overnight"] if overnight else ground["else"]
+    elif isinstance(ground, dict):
+        applies["ground_rule"] = ground["rule"]
+    else:
+        applies["ground_usd"] = ground
+    return {"policy_row_id": row["policy_row_id"], "applies_to_this_customer": applies,
+            "still_unresolved": unresolved, "care": care,
             "explainer": row.get("explainer_en"), "handbook_section_6": fare_rules("6")}
 
 
@@ -109,15 +163,25 @@ def reopen_stats(intent_label: str = "") -> Any:
             g["reopened_within_72h"] += 1
             if r.get("reopen_reason"):
                 g["reasons"].append(r["reopen_reason"])
+    scope = rows
     if want:
-        groups = {k: v for k, v in groups.items() if want in k.lower()}
+        exact = {k: v for k, v in groups.items() if k.lower() == want}
+        groups = (exact
+                  or {k: v for k, v in groups.items() if k.lower().startswith(want)}
+                  or {k: v for k, v in groups.items() if want in k.lower()})
         if not groups:
             return {"error": f"No transcripts match {intent_label!r}.",
                     "available": sorted({r["intent_label"] for r in rows})}
-    return {"sample_size": len(rows),
-            "caveat": "8 human-handled transcripts out of 600 read; a sample, not a rate.",
+        scope = [r for r in rows if r["intent_label"] in groups]
+    return {"sample_size": len(scope),
+            "caveat": (f"{len(rows)} human-handled transcripts out of 600 read; a sample, not a rate. "
+                       "Each kind of problem has only one or two conversations, so a per-problem "
+                       "count is an anecdote: say 'in the one example we have', never a percentage "
+                       "or a promise that it will or won't come back."),
             "by_intent": groups,
-            "overall_reopened": sum(1 for r in rows if r.get("reopened_within_72h"))}
+            "reopened_in_this_selection": sum(1 for r in scope if r.get("reopened_within_72h")),
+            "overall_reopened_all_transcripts": sum(1 for r in rows if r.get("reopened_within_72h")),
+            "overall_sample_size": len(rows)}
 
 
 def next_available_day(origin: str, dest: str, date: str, cabin: str = "Y") -> Any:
@@ -220,9 +284,13 @@ EXTRA_TOOLS: List[Dict[str, Any]] = [    # ✏️ Build 2, step 2.1: schemas for
         "description": (
             "Answer 'do I get a meal or a hotel while I wait?'. Use when the customer asks what "
             "care they are owed during a delay, cancellation or diversion. Needs cause_code and "
-            "status from get_flight_status. Returns the policy row's meal, hotel and ground "
-            "amounts plus Handbook section 6, so quote those and never invent amounts. Unlike check_policy, which resolves the whole "
-            "decision for a booking, this answers only the care question."
+            "status from get_flight_status. For a cancellation or diversion the meal depends on "
+            "how long the wait for an alternative is and the hotel on whether it is overnight: "
+            "pass wait_minutes_for_alternative (from search_alternatives) and overnight when you "
+            "know them. Returns applies_to_this_customer plus still_unresolved: whatever is "
+            "listed as unresolved, tell the customer it depends and never promise it. Quote "
+            "amounts from the result and never invent any. Unlike check_policy, which resolves "
+            "the whole decision for a booking, this answers only the care question."
         ),
         "input_schema": {
             "type": "object",
@@ -232,6 +300,8 @@ EXTRA_TOOLS: List[Dict[str, Any]] = [    # ✏️ Build 2, step 2.1: schemas for
                 "status": {"type": "string", "enum": ["ON_TIME", "DELAYED", "CANCELLED", "DIVERTED"],
                            "description": "Flight status from get_flight_status"},
                 "delay_minutes": {"type": "integer", "description": "Delay in minutes from get_flight_status; 0 if cancelled or diverted"},
+                "wait_minutes_for_alternative": {"type": "integer", "description": "Minutes until the customer's alternative flight departs, from search_alternatives. Omit if not known"},
+                "overnight": {"type": "boolean", "description": "True if the customer will be stuck overnight. Omit if not known"},
             },
             "required": ["cause_code", "status"],
         },
