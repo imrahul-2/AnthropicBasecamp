@@ -20,7 +20,26 @@ from support import (MODEL, SYSTEM_PROMPT, call_local, execute_tool, mcp_client,
 
 MAX_TOOL_CALLS = 8  # Larkspur's own build capped the loop here; then a human takes over.
 
-TONE_ADDENDUM = ""                       # ✏️ Build 4, step 4.1, intelligence goal
+TONE_ADDENDUM = """
+=== HOW TO ANSWER ===
+
+Think about what the customer actually asked before you call anything, and
+answer that question in one complete reply: what happened, what Larkspur owes
+them, and the one next step. Do not make them ask twice.
+
+Work in as few turns as you can without skipping the process above. When two
+calls do not depend on each other, make them in the same turn, for example
+check_policy together with search_alternatives once you know the status. Do not
+call a tool whose answer the customer did not need; a short question about one
+rule needs fare_rules, not a full rebooking search.
+
+If a customer is angry or abusive, stay calm and specific: acknowledge the
+frustration in one sentence, give the facts and what you can do, and escalate
+to a human when they ask for something out of scope or mention legal action.
+Never mirror the anger, argue, or promise what a tool has not confirmed.
+If the request is out of scope (a group, a partner segment, a refund), escalate
+at once with your reasoning rather than running extra lookups first.
+"""                                      # ✏️ Build 4, step 4.1, intelligence goal
 
 
 def fare_rules(section: str) -> Any:
