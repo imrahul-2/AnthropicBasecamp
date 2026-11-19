@@ -20,7 +20,7 @@ from support import (MODEL, SYSTEM_PROMPT, call_local, execute_tool, mcp_client,
 
 MAX_TOOL_CALLS = 8  # Larkspur's own build capped the loop here; then a human takes over.
 
-TONE_ADDENDUM = ""                       # ✏️ Build 4, step 4.1, intelligence goal
+TONE_ADDENDUM = "When threatened or abused, always refer the conversation to a human. Do not promise anything or accept anything. Do not try to handle the conversation by yourself."                       # ✏️ Build 4, step 4.1, intelligence goal
 
 
 def fare_rules(section: str) -> Any:
